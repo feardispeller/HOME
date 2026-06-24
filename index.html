@@ -1,4 +1,11 @@
 <!doctype html>
+<!-- ════════════════════════════════════════════════════════════════════════
+     THE LOOM ROOMS  ·  a LOOM22 experience
+     "The House of the Loom" — a single self-contained, offline, walkable web-art
+     world. Its spaces are the Loom Rooms: the Antechamber, the Warp Hall, the
+     Well, the Seeing, the Loomifesto, the Sky, the Holding, the Seed, and the
+     Outside. One file. No build step. No network. Open it and come in.
+     ════════════════════════════════════════════════════════════════════════ -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -142,7 +149,7 @@ a.act{ display:inline-block; text-decoration:none; }
 <div id="mark"><div class="w">LOOM22</div><div class="s">the&nbsp;antechamber</div></div>
 <button id="mute" aria-label="mute sound" title="sound">sound on</button>
 <div id="roomname"></div>
-<div id="hint">Move&nbsp;·&nbsp;WASD or arrows&nbsp;&nbsp;—&nbsp;&nbsp;E to touch what glows&nbsp;&nbsp;·&nbsp;&nbsp;doors lead deeper</div>
+<div id="hint">Move&nbsp;·&nbsp;WASD or arrows&nbsp;&nbsp;—&nbsp;&nbsp;E or click a door to enter&nbsp;&nbsp;·&nbsp;&nbsp;E for what glows</div>
 
 <div id="touch">
   <div id="stick"><div id="nub"></div></div>
@@ -362,7 +369,7 @@ const ROOMS = {
     name:"The Antechamber",
     world:{ w:1600, h:1000 },
     bounds:{ x:180, y:250, w:1240, h:660 },
-    spawn:[800,850,"up"],
+    spawn:[800,790,"up"],
     walls:[ [0,0,1600,250],[0,0,180,1000],[1420,0,180,1000],[0,910,1600,90] ],
     motes:38, wanderers:1,
     objects:[
@@ -373,6 +380,7 @@ const ROOMS = {
       { id:"loom",      x:800, y:600, draw:"loom",      block:[700,540,200,110], sx:800, sy:730, r:175, kind:"loom",  label:"The loom" },
       { id:"patronage", x:430, y:770, draw:"font",      block:[365,732,130,80],  sx:560, sy:730, r:155, kind:"portal", to:"holding", spawn:[430,560,"right"], label:"How it holds" },
       { id:"sky",       x:1170,y:150, draw:"threshold", block:[1080,80,180,150], sx:1170,sy:330, r:160, kind:"portal", to:"sky", spawn:[650,840,"up"], label:"The sky" },
+      { id:"outside",   x:800, y:902, draw:"voiddoor",  sx:800, sy:900, r:108, kind:"portal", to:"outside", spawn:[0,0,"down"], label:"outside" },
     ],
   },
   warphall:{
@@ -454,6 +462,7 @@ const ROOMS = {
     motes:18, wanderers:0, dark:true,
     objects:[
       { id:"back", x:240, y:430, draw:"threshold", block:[180,360,120,150], sx:360, sy:560, r:150, kind:"portal", to:"antechamber", spawn:[430,700,"up"], label:"The antechamber" },
+      { id:"give", x:430, y:486, draw:"holding", sx:430, sy:486, r:185, kind:"holding", label:"give" },
     ],
   },
   /* THE SEED — the centre of the vesica. The whole house has gestured at this crossing
@@ -471,6 +480,23 @@ const ROOMS = {
       { id:"back", x:550, y:150, draw:"threshold", block:[460,80,180,140], sx:550, sy:300, r:150, kind:"portal", to:"antechamber", spawn:[800,780,"up"], label:"The antechamber" },
     ],
   },
+  /* THE OUTSIDE — no-thing. An endless dark you can walk into, the faint light of the door
+     you came by your only landmark. It seems pointless. You keep going, and the no-thing
+     answers: the 22 surfaces naked, the seed draws itself beneath you, and the silence —
+     which belongs to no one out here — becomes yours, because you are the only presence in
+     it. You leave by turning back toward the light. */
+  outside:{
+    name:"\u00A0",
+    endless:true,
+    world:{ w:200000, h:200000 },
+    bounds:{ x:-100000, y:-100000, w:200000, h:200000 },
+    spawn:[0,0,"down"],
+    walls:[],
+    motes:0, wanderers:0, dark:true,
+    objects:[
+      { id:"origin", x:0, y:0, draw:"voidorigin", sx:0, sy:0, r:64, kind:"voidback", to:"antechamber", spawn:[800,650,"up"], label:"" },
+    ],
+  },
 };
 
 let currentRoom="antechamber";
@@ -484,7 +510,7 @@ let BLOCKERS = [];
    ════════════════════════════════════════════════════════════════════════ */
 const cv = $("stage"); const ctx = cv.getContext("2d");
 let DPR=1, VW=0, VH=0;
-const cam = { scale:1, ox:0, oy:0, follow:false, camX:0, snapped:false };
+const cam = { scale:1, ox:0, oy:0, follow:false, center:false, camX:0, camY:0, snapped:false };
 const player = { x:800, y:850, vx:0, vy:0, dir:"up", moving:false, fAcc:0, trail:[] };
 const keys = new Set();
 const touch = { x:0, y:0, active:false };
@@ -507,6 +533,8 @@ const Mem = {
   loomComplete:false,       // colonnade fully lit
   holding:{ bond:0, gives:0, house:0 },   // the bond you formed with a maker — it persists
   seedFound:false,          // you reached the centre — the seed of the vesica
+  outsideReached:false,     // you walked into the no-thing, and far enough that it answered
+  outsideBloomed:false,     // and further still — far enough that the no-thing grew the flower
 };
 function memVisit(id){ if(!Mem.visited.has(id)){ Mem.visited.add(id); Audio.awaken(0.04); } }
 /* phrasing helpers for the reflection — only ever stating what is true */
@@ -541,11 +569,14 @@ function resize(){
   cv.width = Math.round(VW*DPR); cv.height = Math.round(VH*DPR);
   cv.style.width = VW+"px"; cv.style.height = VH+"px";
   const ratio = VW/VH, worldRatio = WORLD.w/WORLD.h;
-  if(ratio >= worldRatio){
-    cam.follow=false; cam.scale=Math.min(VW/WORLD.w, VH/WORLD.h);
+  if(ROOMS[currentRoom] && ROOMS[currentRoom].endless){
+    cam.center=true; cam.follow=false; cam.snapped=false;
+    cam.scale=clamp(Math.min(VW,VH)/900, 0.7, 1.25);     // a fixed, intimate zoom in the void
+  } else if(ratio >= worldRatio){
+    cam.center=false; cam.follow=false; cam.scale=Math.min(VW/WORLD.w, VH/WORLD.h);
     cam.ox=(VW - WORLD.w*cam.scale)/2; cam.oy=(VH - WORLD.h*cam.scale)/2;
   } else {
-    cam.follow=true;
+    cam.center=false; cam.follow=true;
     const pad=Math.min(VH*0.13, 130);        // headroom so top doorways never clip
     cam.scale=(VH-pad)/WORLD.h; cam.oy=pad; cam.snapped=false;
   }
@@ -562,9 +593,9 @@ function loadRoom(id, spawn){
   BLOCKERS=[ ...R.walls, ...R.objects.filter(o=>o.block).map(o=>o.block) ];
   const sp=spawn||R.spawn;
   player.x=sp[0]; player.y=sp[1]; player.dir=sp[2]||"down";
-  player.vx=0; player.vy=0; player.trail.length=0;
+  player.vx=0; player.vy=0; player.trail.length=0; player.moveTarget=null;
   initMotes(R.motes||40); initWanderers(R.wanderers||0);
-  wellReset(); seeingReset(); skyReset(); holdingReset(); seedReset(); resetPresenceFx(); initSpirits(R); resetWhispers();
+  wellReset(); seeingReset(); skyReset(); holdingReset(); seedReset(); outsideReset(); resetPresenceFx(); initSpirits(R); resetWhispers();
   resize(); cam.snapped=false; showRoomName(R.name);
   if(started){
     Audio.enterRoom(id); memVisit(id);
@@ -626,31 +657,33 @@ window.addEventListener("keyup", e=>{
   keys.delete(k);
 });
 cv.addEventListener("click", e=>{
-  if(!started || paused || transition.active || currentRoom!=="sky") return;
+  if(!started || paused || transition.active) return;
   const w=screenToWorld(e.clientX, e.clientY);
-  if(w.x<BOUNDS.x+8 || w.x>BOUNDS.x+BOUNDS.w-8 || w.y<BOUNDS.y+8 || w.y>BOUNDS.y+BOUNDS.h-8) return;
-  sky.mine.push({ x:w.x, y:w.y, t:0 }); Mem.skyStars.push({ x:w.x, y:w.y });
-  if(!sky.mineFrag) sky.mineFrag="yours, now, too";
-  Audio.chime(true);
+  tapWorld(w.x, w.y, false);                 // desktop: click a door/thing to act (keys still move)
 });
 (function(){
-  const stick=$("stick"); let id=null, cx=0, cy=0; const R=44;
-  function set(px,py){
-    let dx=px-cx, dy=py-cy; const m=Math.hypot(dx,dy);
-    if(m>R){ dx=dx/m*R; dy=dy/m*R; }
-    $("nub").style.transform=`translate(${dx}px,${dy}px)`;
-    touch.x=dx/R; touch.y=dy/R; touch.active=true;
+  // touch anywhere: the ghost walks toward your finger; tap a door to enter; tap the dark to walk there
+  let tid=null, sx=0, sy=0, moved=false;
+  function pt(e){ const t=[...e.changedTouches].find(t=>t.identifier===tid)||e.changedTouches[0]; return t; }
+  cv.addEventListener("touchstart", e=>{
+    if(!started || paused || transition.active) return;
+    e.preventDefault(); const t=e.changedTouches[0]; tid=t.identifier; sx=t.clientX; sy=t.clientY; moved=false;
+    const w=screenToWorld(t.clientX, t.clientY); player.moveTarget={ x:w.x, y:w.y };
+  },{passive:false});
+  cv.addEventListener("touchmove", e=>{
+    if(tid===null) return; e.preventDefault(); const t=pt(e); if(t.identifier!==tid) return;
+    if(Math.hypot(t.clientX-sx, t.clientY-sy)>14) moved=true;
+    const w=screenToWorld(t.clientX, t.clientY); player.moveTarget={ x:w.x, y:w.y };   // follow the finger
+  },{passive:false});
+  function end(e){
+    if(tid===null) return; const t=pt(e); if(t && t.identifier!==tid) return; tid=null;
+    if(paused || transition.active){ player.moveTarget=null; return; }
+    if(!moved){ const w=screenToWorld((t||{clientX:sx}).clientX, (t||{clientY:sy}).clientY);
+      tapWorld(w.x, w.y, true); }                 // a tap: enter a door, touch a thing, or walk there
+    else player.moveTarget=null;                  // a drag: release to stop
   }
-  stick.addEventListener("touchstart",e=>{
-    e.preventDefault(); const t=e.changedTouches[0]; id=t.identifier;
-    const r=stick.getBoundingClientRect(); cx=r.left+r.width/2; cy=r.top+r.height/2; set(t.clientX,t.clientY);
-  },{passive:false});
-  stick.addEventListener("touchmove",e=>{
-    e.preventDefault();
-    for(const t of e.changedTouches) if(t.identifier===id) set(t.clientX,t.clientY);
-  },{passive:false});
-  function end(e){ for(const t of e.changedTouches) if(t.identifier===id){ id=null; touch.x=touch.y=0; touch.active=false; $("nub").style.transform="translate(0,0)"; } }
-  stick.addEventListener("touchend",end); stick.addEventListener("touchcancel",end);
+  cv.addEventListener("touchend", end, {passive:false});
+  cv.addEventListener("touchcancel", e=>{ tid=null; player.moveTarget=null; }, {passive:false});
   $("act").addEventListener("touchstart",e=>{ e.preventDefault(); tryInteract(); },{passive:false});
 })();
 
@@ -661,24 +694,55 @@ function computeNearest(){
   let best=null, bd=Infinity;
   for(const o of OBJECTS){
     if(o.kind==="seed" && !Mem.sky22) continue;   // the centre opens only once the two circles are drawn
+    if(o.kind==="voidback" && !VOID.armed) continue;   // the way back appears only once you've walked out
+    const rr = (o.kind==="portal"||o.kind==="voidback") ? (o.r+110) : o.r;   // doorways are forgiving
     const d=dist2(player.x,player.y,o.sx,o.sy);
-    if(d < o.r*o.r && d<bd){ bd=d; best=o; }
+    if(d < rr*rr && d<bd){ bd=d; best=o; }
   }
   nearest=best;
 }
-function tryInteract(){
-  if(paused || transition.active || !nearest) return;
-  switch(nearest.kind){
-    case "modal":     openModal(nearest.copy); break;
+function doAction(o){
+  if(!o) return;
+  switch(o.kind){
+    case "modal":     openModal(o.copy); break;
     case "loom":      openLoom(); break;
     case "threshold": openLeave(); break;
-    case "portal":    transitionTo(nearest.to, nearest.spawn); break;
-    case "weaver":    openArtist(nearest.artist); break;
+    case "portal":    transitionTo(o.to, o.spawn); break;
+    case "weaver":    openArtist(o.artist); break;
     case "well":      wellTrigger(); break;
     case "holding":   holdGive(); break;
     case "seed":      transitionTo("seed", ROOMS.seed.spawn); break;
-    case "principle": openPrinciple(nearest.idx); break;
+    case "voidback":  transitionTo(o.to, o.spawn); break;
+    case "principle": openPrinciple(o.idx); break;
   }
+}
+function tryInteract(){
+  if(paused || transition.active || !nearest) return;
+  doAction(nearest);
+}
+/* a tap or click in the world: enter a door, touch a thing, place a star, or walk there */
+function tapWorld(wx, wy, allowWalk){
+  if(paused || transition.active) return;
+  // the sky receives your own stars wherever you touch the dark
+  if(currentRoom==="sky"){
+    if(wx>BOUNDS.x+8 && wx<BOUNDS.x+BOUNDS.w-8 && wy>BOUNDS.y+8 && wy<BOUNDS.y+BOUNDS.h-8){
+      let onObj=false; for(const o of OBJECTS){ if(Math.hypot(wx-o.sx,wy-o.sy)<(o.r*0.6)){ onObj=true; break; } }
+      if(!onObj){ sky.mine.push({ x:wx, y:wy, t:0 }); Mem.skyStars.push({ x:wx, y:wy });
+        if(!sky.mineFrag) sky.mineFrag="yours, now, too"; Audio.chime(true); player.moveTarget=null; return; }
+    }
+  }
+  // tap a thing to do its thing — doors enter, looms open, makers speak; doors are forgiving
+  let hit=null, hd=Infinity;
+  for(const o of OBJECTS){
+    if(!o.kind || o.kind==="decor") continue;
+    if(o.kind==="seed" && !Mem.sky22) continue;
+    if(o.kind==="voidback" && !VOID.armed) continue;   // before you've left, the origin is just a place, not a door
+    const rr = o.kind==="voidback" ? (o.r+120) : (o.kind==="portal" ? o.r : (o.r*0.78));
+    const d=Math.hypot(wx-o.sx, wy-o.sy);
+    if(d<rr && d<hd){ hd=d; hit=o; }
+  }
+  if(hit){ player.moveTarget=null; doAction(hit); return; }
+  if(allowWalk) player.moveTarget={ x:wx, y:wy };
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -746,6 +810,7 @@ const Audio = (function(){
     sky:        { cut:6200, wet:0.52, fb:0.40, dl:BEAT*2.00, voice:"stars"   },
     holding:    { cut:2300, wet:0.34, fb:0.40, dl:BEAT*1.10, voice:"choir"   },
     seed:       { cut:1500, wet:0.55, fb:0.50, dl:BEAT*2.20, voice:"depth"   },
+    outside:    { cut:340,  wet:0.62, fb:0.30, dl:BEAT*2.60, voice:"none"    },
   };
 
   function shapeCurve(){ const n=1024,c=new Float32Array(n); for(let i=0;i<n;i++){const x=i/(n-1)*2-1; c[i]=Math.tanh(x*1.5);} return c; }
@@ -1135,6 +1200,8 @@ function openLeave(){
   if(Mem.sky22) L.push("You wrote 22 in the sky.");
   if(Mem.skyStars.length>0) L.push(`You left ${nStars(Mem.skyStars.length)} of your own up there.`);
   if(Mem.seedFound) L.push("And you found the seed \u2014 the centre. You went all the way in.");
+  if(Mem.outsideReached) L.push("You walked out into the no-thing, and far enough that the silence became yours.");
+  if(Mem.outsideBloomed) L.push("And further still \u2014 until the nothing bloomed.");
   if(L.length===1 && muted.length===0) L.unshift("You walked through, and let it be.");
   const c=COPY.threshold;
   let html=`<button class="x" aria-label="close">&times;</button>`;
@@ -1318,7 +1385,12 @@ function drawWanderer(w){
    ════════════════════════════════════════════════════════════════════════ */
 function worldTransform(){
   ctx.setTransform(DPR,0,0,DPR,0,0);
-  if(cam.follow){
+  if(cam.center){                                  // the void: keep you centred, follow both axes, never clamp
+    const tx=VW/2 - player.x*cam.scale, ty=VH/2 - player.y*cam.scale;
+    if(!cam.snapped){ cam.camX=tx; cam.camY=ty; cam.snapped=true; }
+    else { cam.camX += (tx-cam.camX)*Math.min(1,7*lastDt); cam.camY += (ty-cam.camY)*Math.min(1,7*lastDt); }
+    ctx.translate(cam.camX, cam.camY); ctx.scale(cam.scale,cam.scale);
+  } else if(cam.follow){
     const targetOx = clamp(VW/2 - player.x*cam.scale, Math.min(0, VW-WORLD.w*cam.scale), 0);
     if(!cam.snapped){ cam.camX=targetOx; cam.snapped=true; }
     else cam.camX += (targetOx-cam.camX)*Math.min(1, 9*lastDt);
@@ -1328,6 +1400,7 @@ function worldTransform(){
   }
 }
 function screenToWorld(sx,sy){
+  if(cam.center) return { x:(sx-cam.camX)/cam.scale, y:(sy-cam.camY)/cam.scale };
   const ax = cam.follow ? cam.camX : cam.ox;
   return { x:(sx-ax)/cam.scale, y:(sy-cam.oy)/cam.scale };
 }
@@ -1374,7 +1447,8 @@ function drawRipples(){
 /* ── light-spirits — luminous presences that grow curious, and scatter if you rush ── */
 let spirits=[];
 function initSpirits(R){
-  spirits=[]; const n = R.dark? 7 : 11;
+  spirits=[]; if(R.endless) return;            // the outside holds no-thing
+  const n = R.dark? 7 : 11;
   for(let i=0;i<n;i++) spirits.push({
     x:BOUNDS.x+Math.random()*BOUNDS.w, y:BOUNDS.y+Math.random()*BOUNDS.h,
     vx:0, vy:0, ph:Math.random()*7, sp:0.3+Math.random()*0.55, gold:Math.random()<0.5, r:1.5+Math.random()*1.7 });
@@ -1730,6 +1804,7 @@ function drawBeyond(){
   ctx.restore();
 }
 function drawFloor(){
+  if(currentRoom==="outside") return;            // no-thing: the screen stays night-black
   const dark = ROOMS[currentRoom] && ROOMS[currentRoom].dark;
   ctx.fillStyle = dark ? "#050608" : COL.floor; ctx.fillRect(0,0,WORLD.w,WORLD.h);
   drawBeyond();
@@ -2296,6 +2371,20 @@ function drawHoldingRoom(){
   for(const p of holding.parcels){ glow(p.x,p.y,8,"rgba(196,174,255,ALPHA)",0.5);
     ctx.fillStyle="rgba(230,222,255,0.9)"; ctx.beginPath(); ctx.arc(p.x,p.y,2.2,0,7); ctx.fill(); }
   ctx.restore();
+  // ── plain language, so the room reads at a glance ──
+  ctx.save(); ctx.textAlign="center";
+  // the three roles, named
+  ctx.fillStyle="rgba(196,174,255,0.5)"; ctx.font="italic 13px 'Cormorant Garamond',Georgia,serif";
+  ctx.fillText("you", HOLD.YX, HOLD.YY+46);
+  ctx.fillStyle=`rgba(232,194,138,${0.4+mk*0.3})`;
+  ctx.fillText("the maker", HOLD.MX, HOLD.MY+44);
+  // the thesis + the split, stated outright at the top of the room
+  const fx=BOUNDS.x+BOUNDS.w/2, fy=BOUNDS.y+30;
+  ctx.fillStyle="rgba(243,238,226,0.6)"; ctx.font="22px 'Cormorant Garamond',Georgia,serif";
+  ctx.fillText("you hold a maker \u2014 you don\u2019t tip them", fx, fy);
+  ctx.fillStyle="rgba(243,238,226,0.34)"; ctx.font="12px ui-monospace,'SF Mono',monospace";
+  ctx.fillText("EVERY GIVE GOES STRAIGHT TO THEM \u00B7 THE HOUSE KEEPS AT MOST 22% \u00B7 THEY ALWAYS KEEP AUTHORSHIP", fx, fy+24);
+  ctx.restore();
   // the truth, surfacing only as you act
   if(holding.truth) drawFragment(holding.truth, BOUNDS.x+BOUNDS.w/2, BOUNDS.y+BOUNDS.h+8, holding.truthA, "243,238,226");
   // a quiet invitation
@@ -2385,7 +2474,205 @@ function drawSeedMark(o){
   ctx.restore();
 }
 
-const DRAW={ threshold:drawThreshold, roster:drawRoster, loom:drawLoom, lectern:drawLectern, font:drawFont, weaver:drawWeaver, well:drawWell, pillar:drawPillar, holding:drawHolding, seedmark:drawSeedMark };
+/* ── THE OUTSIDE ───────────────────────────────────────────────────────────
+   no-thing. You walk into an endless dark with only the light you came from
+   behind you. For a long, uncomfortable while: nothing. Then — only if you keep
+   going when there's no reason to — the 22 surfaces naked, your trail draws a
+   seed beneath you, and a few lines admit the truth: the silence out here is no
+   one's, which is exactly why it becomes yours. You leave by returning to the light. */
+const VOID = { t:0, dist:0, reveal:0, line:"", lineA:0, lineIdx:0, trail:[], trailAcc:0, armed:false, px:0, py:0,
+  approach:0, found:false, ev:0, gAcc:0, gmotes:[], chAcc:0, lastStep:-1 };   // the void gathers, then reveals the law it always obeyed
+const GOLDEN_ANGLE = Math.PI*(3 - Math.sqrt(5));     // 2.39996… rad = 137.50776° — the angle that never repeats
+const GOLDEN_TURN  = (3 - Math.sqrt(5))/2;           // 0.381966… turns = 1/φ²  (golden angle as a fraction of a rotation)
+// Fibonacci convergents p/q of the golden angle: a rational divergence p/q closes into EXACTLY q spokes.
+// 1/2,1/3,2/5,3/8,5/13,8/21 → 2,3,5,8,13,21 spokes, converging to the angle that never closes. (from ONE-THIRTY-SEVEN)
+const VOID_CONV = [[1,2],[1,3],[2,5],[3,8],[5,13],[8,21]];
+const REV = { IGN:1.2, STEP:0.8, RES:2.2, PK:2.6, REC:4.2 };   // ignite · convergents · resolve · peak · recede
+const VOID_LINES = [
+  { at:2200, s:"Not the absence of something." },
+  { at:3600, s:"The presence of no-thing." },
+  { at:5200, s:"This silence belongs to no one." },
+  { at:6600, s:"Which is the only way it could be yours." },
+];
+function outsideReset(){
+  VOID.t=0; VOID.dist=0; VOID.reveal=0; VOID.line=""; VOID.lineA=0; VOID.lineIdx=0;
+  VOID.trail=[]; VOID.trailAcc=0; VOID.armed=false; VOID.px=player.x; VOID.py=player.y;
+  VOID.approach=0; VOID.found=false; VOID.ev=0; VOID.gAcc=0; VOID.gmotes=[]; VOID.chAcc=0; VOID.lastStep=-1;
+}
+function outsideUpdate(dt){
+  VOID.t+=dt;
+  const step=Math.hypot(player.x-VOID.px, player.y-VOID.py); VOID.px=player.x; VOID.py=player.y;
+  VOID.dist += step;
+  VOID.trailAcc += step;                              // the only mark in the void — your trail
+  if(VOID.trailAcc>24){ VOID.trailAcc=0; VOID.trail.push({x:player.x,y:player.y,life:1}); if(VOID.trail.length>200) VOID.trail.shift(); }
+  for(const p of VOID.trail) p.life=Math.max(0, p.life - dt*0.011);
+  const target=clamp((VOID.dist-1800)/3800, 0, 1);    // the reveal, earned only by walking on
+  VOID.reveal += (target-VOID.reveal)*Math.min(1,dt*0.5);
+  if(VOID.line) VOID.lineA=Math.min(1, VOID.lineA+dt*0.35);
+  while(VOID.lineIdx<VOID_LINES.length && VOID.dist>=VOID_LINES[VOID.lineIdx].at){
+    VOID.line=VOID_LINES[VOID.lineIdx].s; VOID.lineA=0; VOID.lineIdx++;
+    Audio.awaken(0.05); if(VOID.lineIdx>=3) Audio.chime(false);
+  }
+  const dOrig=Math.hypot(player.x, player.y);          // leaving is an act — step back into the light
+  if(dOrig>340) VOID.armed=true;
+  if(VOID.dist>=VOID_LINES[VOID_LINES.length-1].at) Mem.outsideReached=true;
+
+  // PAST EVERY WORD — the no-thing stops being empty. The further you walk, the more it gathers:
+  // motes of light drift in from the dark toward you. Cross the threshold and it reveals the law it
+  // always obeyed — the golden angle — in a moment that completes on its own, whether you move or not.
+  VOID.approach = clamp((VOID.dist-6600)/2200, 0, 1);
+  if(!VOID.found){
+    VOID.gAcc += dt;
+    const interval = 0.12 - VOID.approach*0.085;        // they arrive faster the closer you are
+    if(VOID.approach>0 && VOID.gAcc>interval){
+      VOID.gAcc=0; const a=Math.random()*Math.PI*2, d=520+Math.random()*430;
+      VOID.gmotes.push({ x:player.x+Math.cos(a)*d, y:player.y+Math.sin(a)*d, t:0, life:3+Math.random()*2.4 });
+      if(VOID.gmotes.length>260) VOID.gmotes.shift();
+    }
+    for(const m of VOID.gmotes){ m.t+=dt; m.x+=(player.x-m.x)*dt*0.55; m.y+=(player.y-m.y)*dt*0.55; }
+    VOID.gmotes = VOID.gmotes.filter(m=>m.t<m.life);
+    VOID.chAcc += dt;                                    // a faint chime as the gathering thickens
+    if(VOID.approach>0.35 && VOID.chAcc>1.4){ VOID.chAcc=0; Audio.awaken(0.04+VOID.approach*0.04); }
+    if(VOID.dist>8800){ VOID.found=true; VOID.ev=0; Audio.awaken(0.22); Audio.chime(false); Mem.outsideBloomed=true; }
+  } else {
+    VOID.ev += dt;                                       // the revelation runs on its own clock
+    const cStart=REV.IGN, cEnd=cStart+VOID_CONV.length*REV.STEP, rEnd=cEnd+REV.RES;
+    if(VOID.ev>=cStart && VOID.ev<cEnd){                 // a soft tick as each convergent settles into its spokes
+      const idx=Math.floor((VOID.ev-cStart)/REV.STEP);
+      if(idx!==VOID.lastStep){ VOID.lastStep=idx; Audio.chime(true); }
+    }
+    if(VOID.ev>=rEnd && VOID.ev-dt<rEnd) Audio.awaken(0.16);              // the spokes dissolve into the golden fill
+    if(VOID.ev>=rEnd+0.15 && VOID.ev-dt<rEnd+0.15) Audio.chime(false);   // the two glints meet, and refuse to merge
+  }
+  if(VOID.armed && dOrig<46){ Mem.outsideReached=true; transitionTo("antechamber",[800,820,"up"]); }
+}
+function drawVoidDoor(o){   // the quiet way out, in the antechamber — a slit of deeper dark
+  const x=o.x, y=o.y, prox=clamp(1-Math.hypot(player.x-o.sx,player.y-o.sy)/240,0,1), w=46, h=96;
+  ctx.save();
+  const g=ctx.createLinearGradient(x,y-h,x,y);
+  g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,0.6)");
+  ctx.fillStyle=g; ctx.fillRect(x-w/2,y-h,w,h);
+  ctx.strokeStyle=`rgba(196,174,255,${0.09+prox*0.2})`; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(x-w/2,y); ctx.lineTo(x-w/2,y-h); ctx.quadraticCurveTo(x,y-h-9,x+w/2,y-h); ctx.lineTo(x+w/2,y); ctx.stroke();
+  if(prox>0.02){ ctx.save(); ctx.globalCompositeOperation="lighter";
+    glow(x,y-h*0.5, 22+prox*18, "rgba(196,174,255,ALPHA)", prox*0.1); ctx.restore(); }
+  ctx.restore();
+}
+function drawVoidOrigin(o){   // the light you came from — your only landmark in the no-thing
+  const x=o.x, y=o.y, b=0.5+0.5*Math.sin(time*0.6);
+  ctx.save(); ctx.globalCompositeOperation="lighter";
+  const g=ctx.createRadialGradient(x,y,0,x,y,160);
+  g.addColorStop(0,`rgba(243,238,226,${0.22+b*0.06})`); g.addColorStop(0.5,"rgba(232,194,138,0.05)"); g.addColorStop(1,"rgba(0,0,0,0)");
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,160,0,7); ctx.fill();
+  const gr=ctx.createLinearGradient(x,y-92,x,y+12);
+  gr.addColorStop(0,"rgba(243,238,226,0)"); gr.addColorStop(0.7,`rgba(243,238,226,${0.12+b*0.05})`); gr.addColorStop(1,"rgba(243,238,226,0)");
+  ctx.fillStyle=gr; ctx.fillRect(x-1.5,y-92,3,104);
+  ctx.fillStyle=`rgba(255,253,248,${0.5+b*0.2})`; ctx.beginPath(); ctx.arc(x,y,2.6,0,7); ctx.fill();
+  if(VOID.armed){ ctx.strokeStyle=`rgba(243,238,226,${0.10+0.06*b})`; ctx.lineWidth=1;   // once you've left, it quietly invites you back
+    ctx.beginPath(); ctx.arc(x,y,40+b*6,0,7); ctx.stroke(); }
+  ctx.restore();
+}
+function drawOutsideField(){
+  ctx.save(); ctx.globalCompositeOperation="lighter"; ctx.lineCap="round";    // your trail — the one mark in the void
+  for(let i=1;i<VOID.trail.length;i++){ const a=VOID.trail[i], p=VOID.trail[i-1], life=(a.life+p.life)/2;
+    if(life<=0) continue;
+    ctx.strokeStyle=`rgba(196,174,255,${0.1*life})`; ctx.lineWidth=1.6*life+0.4;
+    ctx.beginPath(); ctx.moveTo(p.x,p.y+18); ctx.lineTo(a.x,a.y+18); ctx.stroke(); }
+  ctx.restore();
+  const beat=0.5+0.5*worldPulse;
+  // THE GATHERING — light drifts in from the dark toward you, thicker the further you've walked
+  if(!VOID.found && VOID.gmotes.length){
+    ctx.save(); ctx.globalCompositeOperation="lighter";
+    for(const m of VOID.gmotes){ const k=clamp(1-m.t/m.life,0,1), d=Math.hypot(m.x-player.x,m.y-player.y);
+      const app=clamp(1-d/640,0,1), al=0.05*k*app*(0.6+0.4*beat);
+      if(al<=0.002) continue;
+      ctx.fillStyle=`rgba(232,228,255,${al})`;
+      ctx.beginPath(); ctx.arc(m.x,m.y+18, 1.1+1.4*app, 0,7); ctx.fill(); }
+    ctx.restore();
+  }
+  const e=VOID.reveal;                                   // the no-thing answers — a seed beneath you, beating with the 22
+  if(e>0.01 && !VOID.found){ const cx=player.x, cy=player.y+18, R=72*e, off=R*0.5;
+    ctx.save(); ctx.globalCompositeOperation="lighter"; ctx.lineWidth=1;
+    ctx.strokeStyle=`rgba(232,194,138,${0.1*e})`; ctx.beginPath(); ctx.arc(cx-off,cy,R*(1+beat*0.03),0,7); ctx.stroke();
+    ctx.strokeStyle=`rgba(196,174,255,${0.1*e})`; ctx.beginPath(); ctx.arc(cx+off,cy,R*(1+beat*0.03),0,7); ctx.stroke();
+    const sg=ctx.createRadialGradient(cx,cy,0,cx,cy,18+beat*8);
+    sg.addColorStop(0,`rgba(247,243,234,${(0.16+0.32*e)*(0.5+0.5*beat)})`); sg.addColorStop(1,"rgba(247,243,234,0)");
+    ctx.fillStyle=sg; ctx.beginPath(); ctx.arc(cx,cy,18+beat*8,0,7); ctx.fill();
+    ctx.restore(); }
+  if(VOID.found) drawVoidRevelation();
+}
+/* THE REVELATION — cross the threshold and the no-thing shows the law it always obeyed. The dark
+   crystallises into the golden angle (137.50776° — Vogel phyllotaxis, the most even never-repeating
+   fill there is) centred on you, unfurling, then folding back. At the peak: the only saturated colour
+   in the whole house — the cool glint and the warm glint drawn together, refusing to merge. Inside,
+   the law was 22, the number we chose; out here it is the one we didn't. No number is shown — the
+   form is the only word. It runs on its own clock, so it can never happen where you cannot see it. */
+/* THE REVELATION — the no-thing shows the law it always obeyed, mathematically. The florets sweep
+   through the Fibonacci convergents — a rational divergence p/q closes into EXACTLY q spokes — counting
+   up 2,3,5,8,13,21, then dissolve into the golden angle (137.50776°), the limit that never closes and
+   fills most evenly: every sunflower. The one place the house shows a number, because revealing the
+   engine is the point. Then the two glints — cool and warm — meet, and refuse to merge. (ONE-THIRTY-SEVEN) */
+function drawVoidRevelation(){
+  const ev=VOID.ev, beat=0.5+0.5*worldPulse, cx=player.x, cy=player.y+18;
+  const sm=u=>{ u=clamp(u,0,1); return u*u*(3-2*u); };
+  const cStart=REV.IGN, NC=VOID_CONV.length, cEnd=cStart+NC*REV.STEP, rEnd=cEnd+REV.RES, pEnd=rEnd+REV.PK, end=pEnd+REV.REC;
+
+  // divergence angle (in turns), the spoke label, and how "golden" we are
+  let angTurn, spokeN=0, frac="", showAngle=false;
+  if(ev<cStart){ angTurn=VOID_CONV[0][0]/VOID_CONV[0][1]; spokeN=VOID_CONV[0][1]; frac="1/2"; }
+  else if(ev<cEnd){
+    const k=(ev-cStart)/REV.STEP, i=Math.min(NC-1,Math.floor(k)), f=k-Math.floor(k);
+    const cur=VOID_CONV[i], nxt=VOID_CONV[Math.min(NC-1,i+1)];
+    angTurn=lerp(cur[0]/cur[1], nxt[0]/nxt[1], f<0.6?0:sm((f-0.6)/0.4));   // hold on the convergent, then slide
+    spokeN=cur[1]; frac=cur[0]+"/"+cur[1];
+  } else if(ev<rEnd){
+    const e=sm((ev-cEnd)/REV.RES), last=VOID_CONV[NC-1];
+    angTurn=lerp(last[0]/last[1], GOLDEN_TURN, e); spokeN=e<0.5?last[1]:0; frac=e<0.5?(last[0]+"/"+last[1]):""; showAngle=e>=0.5;
+  } else { angTurn=GOLDEN_TURN; showAngle=true; }
+
+  const grow=clamp(ev/REV.IGN,0,1), recede=clamp((ev-pEnd)/REV.REC,0,1), vis=1-recede;
+  if(vis<=0) return;
+  const N=Math.floor(110+450*grow), C=12*(0.92+0.08*beat), ang=angTurn*Math.PI*2, maxR=C*Math.sqrt(N);
+  ctx.save(); ctx.globalCompositeOperation="lighter";
+  for(let n=0;n<N;n++){
+    const a=n*ang, r=C*Math.sqrt(n), x=cx+Math.cos(a)*r, y=cy+Math.sin(a)*r;
+    const edge=N>1?n/N:0, fade=clamp((N-n)/60,0,1);
+    const cr=Math.round(247-edge*72), cg=Math.round(248-edge*16);
+    ctx.fillStyle=`rgba(${cr},${cg},255,${(0.05+0.13*fade)*vis*(0.8+0.2*beat)})`;
+    ctx.beginPath(); ctx.arc(x,y,1.3+1.0*fade,0,7); ctx.fill();
+  }
+  const core=ctx.createRadialGradient(cx,cy,0,cx,cy,16+beat*9);     // the still warm centre
+  core.addColorStop(0,`rgba(255,201,142,${(0.16+0.34*grow)*vis})`); core.addColorStop(1,"rgba(255,201,142,0)");
+  ctx.fillStyle=core; ctx.beginPath(); ctx.arc(cx,cy,16+beat*9,0,7); ctx.fill();
+  // the breath of colour — the two glints, meeting, refusing to merge (the only saturated colour in the house)
+  const peak=clamp((ev-rEnd)/0.9,0,1)*clamp((pEnd+0.6-ev)/0.9,0,1);
+  if(peak>0){ const sep=10+(1-peak)*44;
+    const glint=(gx,col)=>{ const g=ctx.createRadialGradient(gx,cy,0,gx,cy,18+beat*9);
+      g.addColorStop(0,col(0.55*peak*vis)); g.addColorStop(1,col(0)); ctx.fillStyle=g;
+      ctx.beginPath(); ctx.arc(gx,cy,18+beat*9,0,7); ctx.fill(); };
+    glint(cx-sep, a=>`rgba(169,220,255,${a})`); glint(cx+sep, a=>`rgba(255,201,142,${a})`);
+  }
+  ctx.restore();
+
+  // the number — shown plainly, because here the form IS the meaning
+  ctx.save(); ctx.textAlign="center"; ctx.globalAlpha=1;
+  const ny=cy+maxR+34;
+  if(spokeN>0 && !showAngle){
+    ctx.fillStyle=`rgba(243,238,226,${0.7*vis})`; ctx.font="600 30px ui-monospace,'SF Mono',monospace";
+    ctx.fillText(String(spokeN), cx, ny);
+    ctx.fillStyle=`rgba(243,238,226,${0.34*vis})`; ctx.font="12px ui-monospace,'SF Mono',monospace";
+    ctx.fillText(frac+" turn  \u2192  "+spokeN+" spokes", cx, ny+20);
+  } else if(showAngle){
+    ctx.fillStyle=`rgba(243,238,226,${0.72*vis})`; ctx.font="600 24px ui-monospace,'SF Mono',monospace";
+    ctx.fillText("137.50776\u00B0", cx, ny);
+    ctx.fillStyle=`rgba(243,238,226,${0.32*vis})`; ctx.font="12px ui-monospace,'SF Mono',monospace";
+    ctx.fillText("the golden angle \u00B7 never closes \u00B7 fills most evenly", cx, ny+20);
+  }
+  ctx.restore();
+}
+function drawOutside(){ if(VOID.line && !VOID.found) drawFragment(VOID.line, player.x, player.y-150, VOID.lineA, "243,238,226"); }
+
+const DRAW={ threshold:drawThreshold, roster:drawRoster, loom:drawLoom, lectern:drawLectern, font:drawFont, weaver:drawWeaver, well:drawWell, pillar:drawPillar, holding:drawHolding, seedmark:drawSeedMark, voiddoor:drawVoidDoor, voidorigin:drawVoidOrigin };
 
 
 /* ── the ghost-orb: the LOOM22 being. A pearl of light with a coloured soul inside.
@@ -2491,12 +2778,17 @@ function step_(now){
   }
 
   if(started && !paused && !transition.active){
-    let ix=0, iy=0;
-    if(keys.has("arrowleft")||keys.has("a")) ix-=1;
-    if(keys.has("arrowright")||keys.has("d")) ix+=1;
-    if(keys.has("arrowup")||keys.has("w")) iy-=1;
-    if(keys.has("arrowdown")||keys.has("s")) iy+=1;
-    if(touch.active){ ix+=touch.x; iy+=touch.y; }
+    let ix=0, iy=0, keyMove=false;
+    if(keys.has("arrowleft")||keys.has("a")){ ix-=1; keyMove=true; }
+    if(keys.has("arrowright")||keys.has("d")){ ix+=1; keyMove=true; }
+    if(keys.has("arrowup")||keys.has("w")){ iy-=1; keyMove=true; }
+    if(keys.has("arrowdown")||keys.has("s")){ iy+=1; keyMove=true; }
+    if(keyMove) player.moveTarget=null;                          // the keys take over at once
+    else if(touch.active){ ix+=touch.x; iy+=touch.y; }
+    if(player.moveTarget && !keyMove){                           // walk toward where you tapped / your finger
+      const dx=player.moveTarget.x-player.x, dy=player.moveTarget.y-player.y, d=Math.hypot(dx,dy);
+      if(d<14){ player.moveTarget=null; } else { ix=dx/d; iy=dy/d; }
+    }
     const m=Math.hypot(ix,iy); if(m>1){ ix/=m; iy/=m; }
     const a=clamp(ACCEL*dt,0,1);
     player.vx += (ix*MOVE - player.vx)*a;
@@ -2541,6 +2833,7 @@ function step_(now){
     else if(currentRoom==="seeing") seeingUpdate(dt);
     else if(currentRoom==="holding") holdingUpdate(dt);
     else if(currentRoom==="seed") seedUpdate(dt);
+    else if(currentRoom==="outside") outsideUpdate(dt);
     else if(currentRoom==="antechamber") updateSigilResonance(dt);
     else if(currentRoom==="sky") skyUpdate(dt);
     else if(currentRoom==="loomifesto"){
@@ -2569,6 +2862,7 @@ function step_(now){
   drawLantern(); drawRipples(); drawTrace();
   drawMotes();
   if(currentRoom==="seeing") drawSeeingForm();
+  else if(currentRoom==="outside") drawOutsideField();
   // y-sorted draw list: objects + wanderers + player
   const list=[];
   for(const o of OBJECTS) list.push({ sortY:o.y, kind:"obj", o });
@@ -2585,6 +2879,7 @@ function step_(now){
   else if(currentRoom==="seeing") drawSeeingText();
   else if(currentRoom==="holding") drawHoldingRoom();
   else if(currentRoom==="seed") drawSeedRoom();
+  else if(currentRoom==="outside") drawOutside();
   else if(currentRoom==="loomifesto") drawPrincipleAccent();
   else if(currentRoom==="sky") drawSkyRoom();
   if(started && !paused && !transition.active && nearest) drawTooltip(nearest);
@@ -2604,8 +2899,9 @@ function init(){
   reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   isCoarse = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
   if(isCoarse){ $("touch").style.display="block";
+    const st=$("stick"); if(st) st.style.display="none";          // whole-screen movement replaces the stick
     const act=$("act"); if(act) act.textContent="\u2726";                 // a touch glyph, not a keyboard key
-    const h=$("hint"); if(h) h.innerHTML="Drag to move&nbsp;&nbsp;·&nbsp;&nbsp;tap&nbsp;\u2726&nbsp;to touch what glows&nbsp;&nbsp;·&nbsp;&nbsp;doors lead deeper";
+    const h=$("hint"); if(h) h.innerHTML="Touch to move&nbsp;&nbsp;·&nbsp;&nbsp;tap a door to enter&nbsp;&nbsp;·&nbsp;&nbsp;tap&nbsp;\u2726&nbsp;for what glows";
   }
   loadRoom("antechamber");          // sets WORLD/BOUNDS/OBJECTS/BLOCKERS + spawn + motes/wanderers
   requestAnimationFrame(step_);
